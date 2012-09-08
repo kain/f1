@@ -1,0 +1,109 @@
+#!/bin/bash
+#
+
+# Exit if any error occurs
+set -e
+
+# TODO
+# check arguments
+# print help if any
+# check if writeable paths
+# check if xmlstarlet is available
+# check if rtmpdump is available
+# + add quiet and normal mode
+
+YEAR=2012
+VIDEO_PATH="/opt/pub/Видео/f1/$YEAR"
+ASSETS_URL="http://cdn.f1.services.nativ-systems.com/xml/2011_assets.xml"
+ASSETS_FILE=2011_assets.xml
+QUIET="true"
+
+mkdir -p "$VIDEO_PATH"
+cd "$VIDEO_PATH"
+
+# Download assets file
+if [ "${QUIET}" = "true" ]
+	then
+	wget --quiet --output-document="$ASSETS_FILE" "$ASSETS_URL"
+	else
+	echo "Downloading assets file..."
+	wget --output-document="$ASSETS_FILE" "$ASSETS_URL"
+	echo "Done"
+fi
+
+# Set field delimeter to "New Line"
+IFS=$'\n'
+# Get array of already downloaded files
+FILES=( $(ls -1 *.mkv) )
+# Strip file names to position only
+for i in $(seq 0 $((${#FILES[*]} - 1)))
+	do
+	FILES[$i]="${FILES[$i]% - *}"
+	if [ "${QUIET}" != "true" ]; then echo "Found video file: ${FILES[$i]}"; fi
+done
+
+if [ "${QUIET}" != "true" ]; then echo "Found video files: ${FILES[@]}"; fi
+
+# Set field delimeter to "New Line"
+IFS=$'\n'
+# Get array of race positions for which race edits available
+RACE_EDITS=( $(xmlstarlet sel -T -t -m "/races/race_period[year='${YEAR}']/./assets/asset[@category='RaceEdit']/../.." -v "string(position)" -n $ASSETS_FILE) )
+if [ "${QUIET}" != "true" ]; then echo "Race positions with all race edits available: ${RACE_EDITS[@]}"; fi
+
+if [ "${QUIET}" != "true" ]
+	then
+	echo "Race edits available: "
+	echo "${RACE_EDITS[@]}"
+	echo -n "Total number of all race edits available: "
+	echo ${#RACE_EDITS[@]}
+fi
+
+# Unset (assign to 'null') array items that already downloaded
+for x in $(seq 0 $((${#RACE_EDITS[*]} - 1)))
+	do
+	for y in $(seq 0 $((${#FILES[*]} - 1)))
+		do
+		if [ "${RACE_EDITS[$x]}" == "${FILES[$y]}" ]
+			then
+			unset RACE_EDITS[$x]
+		fi
+	done
+done
+if [ "${QUIET}" != "true" ]; then echo "New race edits: ${RACE_EDITS[@]}"; fi
+
+# Create a new array without 'null' elements 
+RACE_DOWNLOAD=( ${RACE_EDITS[@]} )
+if [ "${QUIET}" != "true" ]; then echo "New race edits to download: ${RACE_DOWNLOAD[@]}"; fi
+
+if [ "${QUIET}" != "true" ]
+	then
+	echo -n "Race edits not downloaded: "
+	echo ${RACE_DOWNLOAD[@]}
+	echo -n "Total number of race edits to download: "
+	echo ${#RACE_DOWNLOAD[@]}
+fi
+
+if [ "${#RACE_DOWNLOAD[@]}" = "0" ]
+	then
+	exit 0
+fi
+
+# Download new race edits
+for i in $(seq 0 $((${#RACE_DOWNLOAD[*]} - 1)))
+	do
+	FILE_NAME=$(xmlstarlet sel -T -t -m "/races/race_period[year='${YEAR}'][position='${RACE_DOWNLOAD[$i]}']" -v "concat(position, ' - ', circuit)" -n $ASSETS_FILE)
+	if [ "${QUIET}" != "true" ]; then echo "File name: ${FILE_NAME}"; fi
+	DOWNLOAD_URL=$(xmlstarlet sel -T -t -m "/races/race_period[year='${YEAR}'][position='${RACE_DOWNLOAD[$i]}']/./assets/asset[@category='RaceEdit']/video[width='1920']" -v "string(url)" -n $ASSETS_FILE)
+	if [ "${QUIET}" != "true" ]; then echo " Download URL: ${DOWNLOAD_URL}"; fi
+	# Perform an actual download
+	if [ "${QUIET}" = "true" ]
+	        then
+		rtmpdump --quiet --rtmp "${DOWNLOAD_URL}" --flv "${FILE_NAME}.mkv" && echo "New race edit found and downloaded: ${FILE_NAME}.mkv"
+	        else
+	        echo "Downloading race edit..."
+		rtmpdump --rtmp "${DOWNLOAD_URL}" --flv "${FILE_NAME}.mkv" && echo "New race edit found and downloaded: ${FILE_NAME}.mkv"
+	        echo "Done"
+	fi
+done
+
+exit 0
